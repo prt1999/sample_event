@@ -3,6 +3,9 @@ from web3.middleware import geth_poa_middleware
 import argparse
 import datetime
 import asyncio
+from threading import Thread
+import time
+
 
 
 parser = argparse.ArgumentParser()
@@ -71,35 +74,32 @@ def scan_mempool3(token, methodid):
             continue
 
 
-def handle_event(event, methodid, filter_id,id_pending,id_latest):
+def handle_event(event, methodid, filter_id, id_pending, id_latest):
     f_id = 0
-    openTrade = False
     if filter_id == id_pending: f_id = 'pending'
     if filter_id == id_latest: f_id = 'latest'
 
-    while openTrade == False:
-        try:
-                txHash = event['transactionHash']
-                txHashDetails = client.eth.get_transaction(txHash)
-                txFunction = txHashDetails.input[:10]
+    try:
+            txHash = event['transactionHash']
+            txHashDetails = client.eth.get_transaction(txHash)
+            txFunction = txHashDetails.input[:10]
 
-                if txFunction.lower() in methodid:
-                    #openTrade = True
-                    print(datetime.datetime.now(), txHashDetails['blockNumber'], f_id, '\033[32m', txFunction, txHashDetails['to'], txHashDetails['from'], Web3.toHex(txHashDetails['hash']),  '\033[0m')
-                    return True
-                else:
-                    if command_line_args.verbose == False:
-                        print(datetime.datetime.now(), txHashDetails['blockNumber'], f_id, txFunction, txHashDetails['to'], txHashDetails['from'],  Web3.toHex(txHashDetails['hash']))
-                    return False
-        except Exception as e:
-                    print(e)
-                    continue
+            if txFunction.lower() in methodid:
+                print(datetime.datetime.now(), txHashDetails['blockNumber'], f_id, '\033[32m', txFunction, txHashDetails['to'], txHashDetails['from'], Web3.toHex(txHashDetails['hash']),  '\033[0m')
+                return True
+            else:
+                if command_line_args.verbose == False:
+                    print(datetime.datetime.now(), txHashDetails['blockNumber'], f_id, txFunction, txHashDetails['to'], txHashDetails['from'],  Web3.toHex(txHashDetails['hash']))
+                return False
+    except Exception as e:
+        print(e)
 
-async def log_loop(event_filter, methodid, poll_interval, id_pend, id_last):
+async def log_loop(fut, event_filter, methodid, poll_interval, id_pend, id_last):
     while True:
         for event in event_filter.get_new_entries():
-            handle_event(event, methodid, event_filter.filter_id, id_pend, id_last)
-        await asyncio.sleep(poll_interval)
+            result = handle_event(event, methodid, event_filter.filter_id, id_pend, id_last)
+            if result == True: fut.set_result('True')
+        #await asyncio.sleep(poll_interval)
 
 def scan_mempool4(token, methodid):
     block_filter = client.eth.filter({"filter_params": "latest", "address": token})
@@ -107,13 +107,15 @@ def scan_mempool4(token, methodid):
     tx_filter = client.eth.filter({"filter_params": "pending", "address": token})
     id_pend = tx_filter.filter_id
     loop = asyncio.get_event_loop()
+    fut = loop.create_future()
     try:
         loop.run_until_complete(
             asyncio.gather(
-                log_loop(block_filter, methodid, 0.0001, id_pend, id_last),
-                log_loop(tx_filter, methodid, 0.0001, id_pend, id_last)))
+                log_loop(fut, block_filter, methodid, 0.0001, id_pend, id_last),
+                log_loop(fut, tx_filter, methodid, 0.0001, id_pend, id_last)))
     finally:
         loop.close()
+        return
 
 
 # Default function: approve, transfer
@@ -153,7 +155,6 @@ if command_line_args.scan:
     elif meth == '2': scan_mempool2(token, methodId)
     elif meth == '3': scan_mempool3(token, methodId)
     elif meth == '4': scan_mempool4(token, methodId)
-
 else:
     print('Missing/Bad parameter')
 print('end.')
